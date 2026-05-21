@@ -8,6 +8,7 @@ STATUS_FILE="$STATE_DIR/status.json"
 COOLDOWN_FILE="$STATE_DIR/.last_reaction.$SID"
 CONFIG_FILE="$STATE_DIR/config.json"
 
+[ "$BUDDY_DISABLE" = "1" ] && exit 0
 [ -f "$STATUS_FILE" ] || exit 0
 
 INPUT=$(cat)

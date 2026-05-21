@@ -5,6 +5,7 @@
 
 # shellcheck source=../scripts/paths.sh
 source "$(dirname "${BASH_SOURCE[0]}")/../scripts/paths.sh"
+[ "$BUDDY_DISABLE" = "1" ] && exit 0
 
 STATE_DIR="$BUDDY_STATE_DIR"
 STATUS_FILE="$STATE_DIR/status.json"

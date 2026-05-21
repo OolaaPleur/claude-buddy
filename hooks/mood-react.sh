@@ -9,6 +9,7 @@ COOLDOWN_FILE="$STATE_DIR/.last_mood.$SID"
 CONFIG_FILE="$STATE_DIR/config.json"
 EVENTS_FILE="$STATE_DIR/events.json"
 
+[ "$BUDDY_DISABLE" = "1" ] && exit 0
 [ -f "$STATUS_FILE" ] || exit 0
 
 INPUT=$(cat)
