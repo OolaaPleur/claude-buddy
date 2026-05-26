@@ -1,9 +1,73 @@
 #!/usr/bin/env bash
 # statusline/combined-status.sh
-# Two-panel status line: rate-limit stats left, buddy art right.
+# Two-panel status line: context % + model left, buddy art right.
 # buddy-status.sh is intentionally untouched (kept clean for upstream PR).
 
 [ "$BUDDY_SHELL" = "1" ] && exit 0
+
+# ── Compact mode for restricted terminals (e.g. Termux over SSH) ────────────
+if [ "$BUDDY_DISABLE" = "1" ]; then
+    STDIN_DATA=$(cat)
+    printf '%s\n' "$STDIN_DATA" | python3 -c "
+import json, sys
+
+GREEN  = '\033[32m'
+YELLOW = '\033[33m'
+RED    = '\033[31m'
+DIM    = '\033[2m'
+NC     = '\033[0m'
+
+def color_for(pct):
+    if pct is None: return DIM
+    if pct < 30:   return GREEN
+    if pct < 70:   return YELLOW
+    return RED
+
+def build_bar(pct, width=8):
+    if pct is None:
+        return DIM + '░' * width + NC
+    c = color_for(pct)
+    filled = max(0, min(width, round(pct / 100 * width)))
+    return c + '█' * filled + NC + DIM + '░' * (width - filled) + NC
+
+try:
+    data = json.load(sys.stdin)
+except Exception:
+    data = {}
+
+cw       = data.get('context_window', {})
+ctx_pct  = cw.get('used_percentage')
+model    = data.get('model', {}).get('display_name') or data.get('model', {}).get('id') or ''
+rl       = data.get('rate_limits') if isinstance(data.get('rate_limits'), dict) else {}
+rl5h_pct = rl.get('five_hour', {}).get('used_percentage') if rl else None
+rl7d_pct = rl.get('seven_day', {}).get('used_percentage') if rl else None
+effort   = data.get('effort', {}).get('level')
+thinking = data.get('thinking', {}).get('enabled', False)
+
+def stat_str(label, pct):
+    c = color_for(pct)
+    pct_s = f'{round(pct):3d}%' if pct is not None else '  -%'
+    return f'{DIM}{label}{NC} {c}{pct_s}{NC} {build_bar(pct)}'
+
+line1 = [stat_str('ctx', ctx_pct)]
+if rl5h_pct is not None:
+    line1.append(stat_str('5h', rl5h_pct))
+
+line2 = []
+if rl7d_pct is not None:
+    line2.append(stat_str('7d', rl7d_pct))
+
+if model:
+    effort_tag   = f' [{effort[:3]}]' if effort else ''
+    thinking_tag = ' ~' if thinking else ''
+    line2.append(f'{DIM}{model}{effort_tag}{thinking_tag}{NC}')
+
+print('  '.join(line1))
+if line2:
+    print('  '.join(line2))
+" 2>/dev/null
+    exit 0
+fi
 
 SCRIPT_DIR="$(dirname "${BASH_SOURCE[0]}")"
 BUDDY_SCRIPT="$SCRIPT_DIR/buddy-status.sh"
@@ -15,39 +79,31 @@ fi
 # ── Capture stdin from Claude Code ──────────────────────────────────────────
 STDIN_DATA=$(cat)
 
-# ── Parse rate-limit fields ──────────────────────────────────────────────────
+# ── Parse context % and model ────────────────────────────────────────────────
 STATS_JSON=$(printf '%s\n' "$STDIN_DATA" | python3 -c "
-import json, sys, datetime
-
-def fmt_session_reset(ts):
-    if not ts: return '--'
-    diff = datetime.datetime.fromtimestamp(ts, tz=datetime.timezone.utc) - datetime.datetime.now(datetime.timezone.utc)
-    mins = max(0, int(diff.total_seconds() / 60))
-    h, m = mins // 60, mins % 60
-    return f'{h}h{m:02d}m' if h else f'{m}m'
-
-def fmt_weekly_reset(ts):
-    if not ts: return '--'
-    diff = datetime.datetime.fromtimestamp(ts, tz=datetime.timezone.utc) - datetime.datetime.now(datetime.timezone.utc)
-    secs = max(0, int(diff.total_seconds()))
-    d = secs // 86400
-    h = (secs % 86400) // 3600
-    m = (secs % 3600) // 60
-    return f'{d}d{h:02d}h' if d else (f'{h}h{m:02d}m' if h else f'{m}m')
-
+import json, sys
 try:
     data = json.load(sys.stdin)
+    cw = data.get('context_window', {})
+    ctx_pct = cw.get('used_percentage')
+    model = data.get('model', {}).get('display_name') or data.get('model', {}).get('id')
     rl = data.get('rate_limits', {})
-    fh = rl.get('five_hour', {})
-    sd = rl.get('seven_day', {})
-    sess_pct = fh.get('used_percentage')
-    week_pct = sd.get('used_percentage')
+    rl5h_pct    = rl.get('five_hour', {}).get('used_percentage') if isinstance(rl, dict) else None
+    rl5h_reset  = rl.get('five_hour', {}).get('resets_at')       if isinstance(rl, dict) else None
+    rl7d_pct    = rl.get('seven_day', {}).get('used_percentage') if isinstance(rl, dict) else None
+    rl7d_reset  = rl.get('seven_day', {}).get('resets_at')       if isinstance(rl, dict) else None
+    effort      = data.get('effort', {}).get('level')
+    thinking    = data.get('thinking', {}).get('enabled', False)
     print(json.dumps({
-        'sess_pct': sess_pct,
-        'sess_reset': fmt_session_reset(fh.get('resets_at')),
-        'week_pct': week_pct,
-        'week_reset': fmt_weekly_reset(sd.get('resets_at')),
-        'has_data': sess_pct is not None or week_pct is not None,
+        'ctx_pct':   ctx_pct,
+        'rl5h_pct':  rl5h_pct,
+        'rl5h_reset': rl5h_reset,
+        'rl7d_pct':  rl7d_pct,
+        'rl7d_reset': rl7d_reset,
+        'model':     model or '',
+        'effort':    effort,
+        'thinking':  thinking,
+        'has_data':  ctx_pct is not None or bool(model),
     }))
 except Exception:
     print('{}')
@@ -59,7 +115,7 @@ BUDDY_OUTPUT=$("$BUDDY_SCRIPT" </dev/null 2>/dev/null)
 # No buddy output → exit silently (muted, no state, etc.)
 [ -z "$BUDDY_OUTPUT" ] && exit 0
 
-# No rate-limit data → pass buddy output through unchanged
+# No context data → pass buddy output through unchanged
 HAS_DATA=$(python3 -c "
 import json, sys
 d = json.loads('''$STATS_JSON''' or '{}')
@@ -73,9 +129,9 @@ fi
 
 # ── Merge stat lines into buddy output ──────────────────────────────────────
 printf '%s\n' "$BUDDY_OUTPUT" | STATS_JSON="$STATS_JSON" python3 -c "
-import sys, json, os, re
+import sys, json, os
 
-BRAILLE = '\u2800'
+BRAILLE = '⠀'
 GREEN   = '\033[32m'
 YELLOW  = '\033[33m'
 RED     = '\033[31m'
@@ -95,31 +151,65 @@ def build_bar(pct, width=10):
     filled = max(0, min(width, round(pct / 100 * width)))
     return c + '█' * filled + NC + DIM + '░' * (width - filled) + NC
 
-def fmt_stat(label, pct, reset):
-    c = color_for(pct)
-    pct_str = f'{round(pct):3d}%' if pct is not None else '  -%'
-    bar = build_bar(pct)
-    text = f'{DIM}{label}{NC} {c}{pct_str}{NC} {bar} {c}↻{reset}{NC}'
-    visual_width = 2 + 1 + 4 + 1 + 10 + 1 + 1 + len(reset)
-    return text, visual_width
-
 try:
     stats = json.loads(os.environ.get('STATS_JSON', '{}'))
 except Exception:
     stats = {}
 
-lines = sys.stdin.read().splitlines()
-n = len(lines)
-center = 1 
+import time
 
-stat_items = [
-    fmt_stat('5h', stats.get('sess_pct'), stats.get('sess_reset', '--')),
-    fmt_stat('7d', stats.get('week_pct'), stats.get('week_reset', '--')),
-]
+ctx_pct    = stats.get('ctx_pct')
+rl5h_pct   = stats.get('rl5h_pct')
+rl5h_reset = stats.get('rl5h_reset')
+rl7d_pct   = stats.get('rl7d_pct')
+rl7d_reset = stats.get('rl7d_reset')
+model      = stats.get('model', '')
+effort     = stats.get('effort')
+thinking   = stats.get('thinking', False)
+
+def fmt_countdown(resets_at):
+    if resets_at is None:
+        return ''
+    secs = int(resets_at) - int(time.time())
+    if secs <= 0:
+        return ''
+    d, rem = divmod(secs, 86400)
+    h, rem = divmod(rem, 3600)
+    m = rem // 60
+    if d:    return f' {d}d{h}h'
+    if h:    return f' {h}h{m:02d}m'
+    return f' {m}m'
+
+def make_bar_line(label, pct, countdown=''):
+    c = color_for(pct)
+    pct_str = f'{round(pct):3d}%' if pct is not None else '  -%'
+    bar = build_bar(pct)
+    cd  = f'{DIM}{countdown}{NC}' if countdown else ''
+    text  = f'{DIM}{label}{NC} {c}{pct_str}{NC} {bar}{cd}'
+    width = len(label) + 1 + 4 + 1 + 10 + len(countdown)
+    return text, width
+
+ctx_text,  ctx_width  = make_bar_line('ctx', ctx_pct)
+rl5h_text, rl5h_width = make_bar_line('5h',  rl5h_pct, fmt_countdown(rl5h_reset))
+rl7d_text, rl7d_width = make_bar_line('7d',  rl7d_pct, fmt_countdown(rl7d_reset))
+
+effort_tag   = f' [{effort[:3]}]' if effort else ''
+thinking_tag = ' ~' if thinking else ''
+model_suffix = f'{DIM}{effort_tag}{thinking_tag}{NC}' if (effort_tag or thinking_tag) else ''
+model_text   = f'{DIM}{model}{NC}{model_suffix}' if model else ''
+model_width  = len(model) + len(effort_tag) + len(thinking_tag)
+
+stat_items = [(ctx_text, ctx_width)]
+if rl5h_pct is not None: stat_items.append((rl5h_text, rl5h_width))
+if rl7d_pct is not None: stat_items.append((rl7d_text, rl7d_width))
+stat_items.append((model_text, model_width))
+
+lines = sys.stdin.read().splitlines()
+center = 1
 
 for i, line in enumerate(lines):
     si = i - center
-    if 0 <= si < 2 and line.startswith(BRAILLE):
+    if 0 <= si < len(stat_items) and line.startswith(BRAILLE):
         stat_text, stat_width = stat_items[si]
         after_braille = line[1:]
         num_spaces = len(after_braille) - len(after_braille.lstrip(' '))

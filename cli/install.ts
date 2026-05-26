@@ -147,7 +147,7 @@ function installSkill() {
 // ─── Step 3: Configure status line (with animation refresh) ─────────────────
 
 function installStatusLine(settings: Record<string, any>) {
-  const statusScript = join(PROJECT_ROOT, "statusline", "buddy-status.sh");
+  const statusScript = join(PROJECT_ROOT, "statusline", "combined-status.sh");
 
   settings.statusLine = {
     type: "command",
